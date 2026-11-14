@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PG Mate</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f5257">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#f3f6f6;--card:#fff;--ink:#16292b;--mute:#5d7274;--line:#d9e3e3;--brand:#0f5257;--on:#fff;--warn:#b45309;--ok:#15803d}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1718;--card:#142224;--ink:#e6f0f0;--mute:#8fa6a8;--line:#244043;--brand:#4fb3b8;--on:#06191a;--warn:#f59e0b;--ok:#4ade80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:70px}
+header{background:var(--brand);color:var(--on);padding:14px 16px}
+header b{font-size:18px}header small{display:block;opacity:.85}
+main{max-width:640px;margin:0 auto;padding:12px 16px}
+h2{font-size:17px;margin:20px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+label{display:block;font-size:14px;color:var(--mute);margin:8px 0 3px}
+input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+button{background:var(--brand);color:var(--on);border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:600;margin-top:10px;cursor:pointer}
+button.ghost{background:transparent;color:var(--brand);border:1px solid var(--brand)}
+button.sm{padding:6px 10px;margin:0;font-size:14px}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0}
+.row+.row{border-top:1px solid var(--line)}
+.tag{font-size:13px;padding:2px 8px;border-radius:99px;border:1px solid currentColor}
+.Pending,.Open{color:var(--warn)}.Paid,.Fixed{color:var(--ok)}.Inprogress{color:var(--brand)}
+.mute,small{color:var(--mute)}
+nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--line);display:flex}
+nav button{flex:1;background:none;color:var(--mute);border-radius:0;margin:0;padding:12px 2px;font-size:13px}
+nav button.on{color:var(--brand);box-shadow:inset 0 3px 0 var(--brand)}
+</style>
+</head>
+<body>
+<header><b>PG Mate</b><small>Meals, rent, issues, notices and shared expenses in one place</small></header>
+<main id="app"></main>
+<nav id="nav"></nav>
+<script>
+const MEALS = ['breakfast', 'lunch', 'dinner'];
+const TABS = [['meals', 'Meals'], ['rent', 'Rent'], ['issues', 'Issues'], ['notices', 'Notices'], ['split', 'Split']];
+const DEF = () => ({ menu: {}, skips: {}, rents: [], issues: [], notices: [], people: [], expenses: [] });
+let tab = 'meals';
+let S = DEF();
+try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem('pgmate') || '{}')); } catch (e) {}
+const save = () => { try { localStorage.setItem('pgmate', JSON.stringify(S)); } catch (e) {} render(); };
+const $ = (id) => document.getElementById(id);
+const val = (id) => $(id).value.trim();
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const today = () => new Date().toLocaleDateString('en-CA');
+const rupee = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const cls = (s) => s.replace(/\s/g, '');
+
+const views = {
+  meals() {
+    const d = today(), m = S.menu[d] || {}, sk = S.skips[d] || [];
+    return `<h2>Today's menu</h2><div class="card">
+      ${MEALS.map((x) => `<label>${x}</label><input id="m_${x}" value="${esc(m[x])}" placeholder="e.g. Poha and tea">`).join('')}
+      <button onclick="saveMenu()">Save menu</button></div>
+      <h2>Will you eat today?</h2><div class="card">${MEALS.map((x) => `<div class="row"><span>${x}</span>
+      <button class="sm ${sk.includes(x) ? '' : 'ghost'}" onclick="toggleSkip('${x}')">${sk.includes(x) ? 'Skipping' : 'Skip this meal'}</button></div>`).join('')}</div>`;
+  },
+  rent() {
+    const due = S.rents.filter((r) => !r.paid).reduce((a, r) => a + r.amount, 0);
+    return `<h2>Add a month</h2><div class="card"><label>Month</label><input id="r_m" type="month" value="${today().slice(0, 7)}">
+      <label>Rent (₹)</label><input id="r_a" type="number" min="1"><button onclick="addRent()">Add month</button></div>
+      <h2>Rent history ${due ? `<small>(${rupee(due)} pending)</small>` : ''}</h2>
+      ${S.rents.length ? `<div class="card">${[...S.rents].sort((a, b) => b.month.localeCompare(a.month)).map((r) => `<div class="row"><div><b>${esc(r.month)}</b> ${rupee(r.amount)}</div>
+      <div><span class="tag ${r.paid ? 'Paid' : 'Pending'}">${r.paid ? 'Paid' : 'Pending'}</span>
+      <button class="sm ghost" onclick="togglePaid(${r.id})">${r.paid ? 'Undo' : 'Mark paid'}</button>
+      <button class="sm ghost" onclick="del('rents',${r.id})">Delete</button></div></div>`).join('')}</div>` : '<p class="mute">No months added yet.</p>'}`;
+  },
+  issues() {
+    return `<h2>Report a problem</h2><div class="card"><label>What is it about?</label>
+      <select id="i_c"><option>Water</option><option>WiFi</option><option>Electricity</option><option>Cleaning</option><option>Food</option><option>Other</option></select>
+      <label>Describe the problem</label><textarea id="i_t" rows="3"></textarea><button onclick="addIssue()">Save issue</button></div>
+      <h2>Issues</h2>${S.issues.length ? S.issues.map((i) => `<div class="card"><div class="row"><b>${esc(i.cat)}</b><span class="tag ${cls(i.status)}">${i.status}</span></div>
+      ${esc(i.text)}<br><small>${i.date}</small><div class="row"><select onchange="setStatus(${i.id},this.value)">${['Open', 'In progress', 'Fixed'].map((s) => `<option ${s === i.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <button class="sm ghost" onclick="del('issues',${i.id})">Delete</button></div></div>`).join('') : '<p class="mute">No issues. Good news.</p>'}`;
+  },
+  notices() {
+    return `<h2>Add a notice</h2><div class="card"><label>Title</label><input id="n_t"><label>Details</label><textarea id="n_b" rows="3"></textarea><button onclick="addNotice()">Save notice</button></div>
+      <h2>Notices</h2>${S.notices.length ? S.notices.map((n) => `<div class="card"><b>${esc(n.title)}</b><br>${esc(n.body)}<div class="row"><small>${n.date}</small>
+      <button class="sm ghost" onclick="del('notices',${n.id})">Delete</button></div></div>`).join('') : '<p class="mute">No notices yet.</p>'}`;
+  },
+  split() {
+    const ppl = S.people, plan = settle();
+    return `<h2>Roommates</h2><div class="card"><div class="row"><input id="p_n" placeholder="Add a name"><button class="sm" onclick="addPerson()">Add</button></div>
+      <p>${ppl.length ? ppl.map(esc).join(', ') : '<span class="mute">Add everyone who shares expenses.</span>'}</p></div>
+      ${ppl.length ? `<h2>Add an expense</h2><div class="card"><label>What was it for?</label><input id="e_w" placeholder="Groceries, WiFi...">
+      <label>Amount (₹)</label><input id="e_a" type="number" min="1"><label>Who paid?</label><select id="e_b">${ppl.map((p) => `<option>${esc(p)}</option>`).join('')}</select>
+      <button onclick="addExpense()">Add expense</button></div>` : ''}
+      <h2>Who owes whom</h2><div class="card">${plan.length ? plan.map((l) => `<div class="row">${esc(l)}</div>`).join('') : '<span class="mute">Everyone is settled.</span>'}</div>
+      ${S.expenses.length ? `<h2>Expenses</h2><div class="card">${S.expenses.map((e) => `<div class="row"><span>${esc(e.what)} <small>paid by ${esc(e.by)}</small></span>
+      <span>${rupee(e.amount)} <button class="sm ghost" onclick="del('expenses',${e.id})">x</button></span></div>`).join('')}</div>
+      <button class="ghost" onclick="clearExpenses()">All settled, clear expenses</button>` : ''}
+      <p><button class="ghost sm" onclick="resetAll()">Erase all app data</button></p>`;
+  },
+};
+
+function settle() {
+  const n = S.people.length, bal = {};
+  if (!n) return [];
+  S.people.forEach((p) => (bal[p] = 0));
+  S.expenses.forEach((e) => { bal[e.by] += e.amount; S.people.forEach((p) => (bal[p] -= e.amount / n)); });
+  const debtors = [], creditors = [];
+  Object.keys(bal).forEach((p) => { const b = Math.round(bal[p] * 100) / 100; if (b < -0.01) debtors.push([p, -b]); else if (b > 0.01) creditors.push([p, b]); });
+  const out = []; let i = 0, j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const x = Math.min(debtors[i][1], creditors[j][1]);
+    out.push(`${debtors[i][0]} pays ${creditors[j][0]} ${rupee(x)}`);
+    debtors[i][1] -= x; creditors[j][1] -= x;
+    if (debtors[i][1] < 0.01) i++;
+    if (creditors[j][1] < 0.01) j++;
+  }
+  return out;
+}
+
+const id = () => Date.now() + Math.floor(Math.random() * 1000);
+const del = (list, i) => { S[list] = S[list].filter((x) => x.id !== i); save(); };
+function saveMenu() { S.menu[today()] = { breakfast: val('m_breakfast'), lunch: val('m_lunch'), dinner: val('m_dinner') }; save(); }
+function toggleSkip(meal) { const d = today(), a = S.skips[d] || []; S.skips[d] = a.includes(meal) ? a.filter((x) => x !== meal) : [...a, meal]; save(); }
+function addRent() {
+  const month = val('r_m'), amount = Number(val('r_a'));
+  if (!month || !(amount > 0)) return alert('Enter a month and the rent amount');
+  if (S.rents.some((r) => r.month === month)) return alert('This month is already added');
+  S.rents.push({ id: id(), month, amount, paid: false }); save();
+}
+function togglePaid(i) { const r = S.rents.find((x) => x.id === i); r.paid = !r.paid; save(); }
+function addIssue() {
+  if (!val('i_t')) return alert('Describe the problem');
+  S.issues.unshift({ id: id(), cat: val('i_c'), text: val('i_t'), status: 'Open', date: today() }); save();
+}
+function setStatus(i, s) { S.issues.find((x) => x.id === i).status = s; save(); }
+function addNotice() {
+  if (!val('n_t')) return alert('Add a title');
+  S.notices.unshift({ id: id(), title: val('n_t'), body: val('n_b'), date: today() }); save();
+}
+function addPerson() {
+  const n = val('p_n');
+  if (!n) return;
+  if (S.people.includes(n)) return alert('This name is already added');
+  S.people.push(n); save();
+}
+function addExpense() {
+  const amount = Number(val('e_a'));
+  if (!val('e_w') || !(amount > 0)) return alert('Enter what it was for and the amount');
+  S.expenses.push({ id: id(), what: val('e_w'), amount, by: val('e_b') }); save();
+}
+function clearExpenses() { if (confirm('Clear all expenses?')) { S.expenses = []; save(); } }
+function resetAll() { if (confirm('Erase everything in this app on this device?')) { S = DEF(); save(); } }
+
+function render() {
+  $('nav').innerHTML = TABS.map(([k, n]) => `<button class="${tab === k ? 'on' : ''}" onclick="tab='${k}';render()">${n}</button>`).join('');
+  $('app').innerHTML = views[tab]();
+}
+render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
